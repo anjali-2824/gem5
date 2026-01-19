@@ -306,6 +306,281 @@ When making modifications:
 3. Document any new configuration parameters
 4. Update this guide if adding new features
 
+## Simulating Matrix-Vector Multiplication
+
+### Overview
+
+A complete matrix-vector multiplication benchmark is provided to demonstrate architectural simulation with gem5 and NVMain. This example shows how to:
+- Run compute-intensive workloads in gem5
+- Compare different CPU models and cache configurations
+- Evaluate NVM vs DRAM performance for memory-intensive operations
+- Collect detailed performance statistics
+
+### Quick Start
+
+```bash
+# 1. Build the benchmark
+cd benchmarks
+make
+cd ..
+
+# 2. Run with default configuration (DDR4 memory, 256x256 matrix)
+./build/X86/gem5.opt configs/mvm_simulation.py
+
+# 3. Run with NVMain ReRAM
+./build/X86/gem5.opt configs/mvm_simulation.py --memory-type=nvmain
+
+# 4. Run with larger matrix and O3 CPU
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --rows=512 --cols=512 --cpu-type=o3
+```
+
+### Benchmark Details
+
+**File:** `benchmarks/mvm_benchmark.c`
+
+Features:
+- Parameterizable matrix dimensions via command-line
+- Simple double-precision floating-point computation
+- Checksum validation for correctness
+- Optional gem5 magic instructions for region-of-interest (ROI) statistics
+- Static linking for easy gem5 SE mode execution
+
+Key computation:
+```c
+// Matrix-Vector Multiply: y = A * x
+for (int i = 0; i < rows; i++) {
+    y[i] = 0.0;
+    for (int j = 0; j < cols; j++) {
+        y[i] += A[i][j] * x[j];
+    }
+}
+```
+
+### Compilation Options
+
+```bash
+cd benchmarks
+
+# Basic version (no gem5 annotations)
+make mvm_benchmark
+
+# Version with gem5 ROI markers (requires m5ops library)
+# First build m5ops if not already built:
+cd ../util/m5
+scons build/x86/out/m5
+cd ../../benchmarks
+
+# Then build annotated version:
+make mvm_benchmark_m5ops
+```
+
+**Benefits of m5ops version:**
+- Reset statistics before main computation
+- Exclude initialization and cleanup from performance metrics
+- Mark specific code regions for detailed analysis
+
+### Configuration Script Options
+
+**File:** `configs/mvm_simulation.py`
+
+```bash
+# CPU Models
+--cpu-type=timing    # Fast, in-order, single-cycle execution (default)
+--cpu-type=o3        # Out-of-order CPU with complex pipeline
+--cpu-type=minor     # In-order CPU with detailed pipeline modeling
+
+# CPU Frequency
+--cpu-clock=1GHz     # Slower clock
+--cpu-clock=3GHz     # Faster clock
+
+# Matrix Size
+--rows=128 --cols=128      # Small (fast simulation)
+--rows=512 --cols=512      # Medium
+--rows=1024 --cols=1024    # Large (long simulation time)
+
+# Cache Configuration
+--l1i-size=16kB --l1d-size=16kB --l2-size=128kB   # Smaller caches
+--l1i-size=64kB --l1d-size=64kB --l2-size=1MB     # Larger caches
+
+# Memory Type
+--memory-type=ddr4          # Standard DRAM (default)
+--memory-type=nvmain        # Non-volatile memory via NVMain
+
+# NVMain Configuration (when using --memory-type=nvmain)
+--nvmain-config=ext/NVmain/Config/RRAM_ISSCC_2012_4GB.config      # ReRAM
+--nvmain-config=ext/NVmain/Config/PCM_ISSCC_2012_4GB.config       # PCM
+--nvmain-config=ext/NVmain/Config/STTRAM_Everspin_4GB.config      # STT-RAM
+
+# Memory Size
+--mem-size=512MB
+--mem-size=2GB
+```
+
+### Example Use Cases
+
+#### 1. Compare CPU Models
+
+```bash
+# TimingSimpleCPU (baseline)
+./build/X86/gem5.opt configs/mvm_simulation.py --cpu-type=timing
+mv m5out m5out_timing
+
+# O3CPU (out-of-order, higher performance)
+./build/X86/gem5.opt configs/mvm_simulation.py --cpu-type=o3
+mv m5out m5out_o3
+
+# Compare CPI
+echo "Timing CPU CPI:"
+grep "system.cpu.cpi" m5out_timing/stats.txt
+
+echo "O3 CPU CPI:"
+grep "system.cpu.cpi" m5out_o3/stats.txt
+```
+
+#### 2. Evaluate Cache Sensitivity
+
+```bash
+# Small caches (more misses expected)
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --l1d-size=16kB --l2-size=128kB
+mv m5out m5out_small_cache
+
+# Large caches (fewer misses expected)
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --l1d-size=64kB --l2-size=1MB
+mv m5out m5out_large_cache
+
+# Compare cache miss rates
+grep "dcache.overall_miss_rate" m5out_small_cache/stats.txt
+grep "dcache.overall_miss_rate" m5out_large_cache/stats.txt
+```
+
+#### 3. Compare DRAM vs NVM Performance
+
+```bash
+# DDR4 baseline
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --memory-type=ddr4 --rows=512 --cols=512
+mv m5out m5out_ddr4
+
+# ReRAM (higher write latency, lower energy)
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --memory-type=nvmain --rows=512 --cols=512
+mv m5out m5out_rram
+
+# Compare performance
+echo "DDR4 simulation time:"
+grep "simTicks" m5out_ddr4/stats.txt
+
+echo "ReRAM simulation time:"
+grep "simTicks" m5out_rram/stats.txt
+
+# Compare energy (NVMain only)
+grep "Energy" m5out_rram/stats.txt
+```
+
+#### 4. Analyze Memory Bandwidth
+
+```bash
+# Run with larger matrix to stress memory
+./build/X86/gem5.opt configs/mvm_simulation.py \
+    --rows=1024 --cols=1024 --memory-type=nvmain
+
+# Check memory statistics
+cat m5out/stats.txt | grep -E "(Read|Write).*Total"
+cat m5out/stats.txt | grep -E "avgQLat"  # Average queue latency
+```
+
+### Understanding Statistics
+
+Key metrics in `m5out/stats.txt`:
+
+```bash
+# CPU Performance
+system.cpu.numCycles                 # Total CPU cycles
+system.cpu.cpi                       # Cycles per instruction
+system.cpu.ipc                       # Instructions per cycle
+
+# Cache Performance
+system.cpu.dcache.overall_miss_rate  # Data cache miss rate
+system.l2cache.overall_miss_rate     # L2 cache miss rate
+system.cpu.dcache.overall_misses     # Total data cache misses
+
+# Memory Performance (DDR4)
+system.mem_ctrl.readReqs             # Total read requests
+system.mem_ctrl.writeReqs            # Total write requests
+system.mem_ctrl.avgRdBW              # Average read bandwidth (B/s)
+
+# Memory Performance (NVMain)
+# Look for lines containing:
+# - ReadTotal, WriteTotal             # Total read/write operations
+# - AvgLatency                        # Average memory latency
+# - Energy                            # Energy consumption per channel
+# - Endurance                         # Write endurance metrics
+
+# Overall Simulation
+simSeconds                           # Simulated time in seconds
+simTicks                             # Simulated time in ticks
+hostSeconds                          # Real wall-clock time
+```
+
+### Performance Exploration Ideas
+
+1. **Algorithmic Optimization:**
+   - Modify the benchmark to use tiled matrix-vector multiply
+   - Compare blocked vs non-blocked implementations
+   - Evaluate prefetching impact
+
+2. **Memory Hierarchy Design:**
+   - Test various L1/L2 cache sizes
+   - Experiment with cache associativity
+   - Try different cache line sizes
+
+3. **NVM Technology Comparison:**
+   - Compare ReRAM, PCM, and STT-RAM latency/energy
+   - Evaluate endurance for write-heavy workloads
+   - Test hybrid DRAM+NVM configurations
+
+4. **CPU Microarchitecture:**
+   - Compare in-order vs out-of-order execution
+   - Evaluate impact of clock frequency scaling
+   - Test different pipeline depths (Minor CPU)
+
+### Troubleshooting
+
+**Compilation errors:**
+```bash
+# Ensure GCC is installed
+gcc --version
+
+# For static linking issues on newer systems:
+sudo apt-get install gcc-multilib
+```
+
+**gem5 simulation errors:**
+```bash
+# "Binary not found"
+# Solution: Check that benchmarks/mvm_benchmark exists
+ls -l benchmarks/mvm_benchmark
+
+# "Cannot open NVMain config"
+# Solution: Verify config path is correct
+ls ext/NVmain/Config/*.config
+
+# Simulation too slow
+# Solution: Reduce matrix size or use TimingSimpleCPU
+./build/X86/gem5.opt configs/mvm_simulation.py --rows=128 --cols=128
+```
+
+### Next Steps
+
+- **Add more benchmarks:** Create matrix multiplication (MxM), convolution, or FFT
+- **Multi-core simulation:** Extend script to use multiple CPUs
+- **Full-system mode:** Boot Linux and run benchmarks in OS context
+- **Custom memory controllers:** Modify NVMain configs for novel NVM designs
+- **Trace generation:** Enable debug flags for detailed memory access traces
+
 ## License
 
 - gem5: BSD-style license
