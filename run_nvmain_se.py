@@ -5,7 +5,7 @@ from m5.objects import SEWorkload
 # Paths
 binary = "tests/test-progs/hello/bin/x86/linux/hello"
 config_path = (
-    "/home/anjali-naluvala/gem5/ext/NVmain/Config/RRAM_ISSCC_2012_4GB.config"
+    "/home/anjali/gem5/ext/NVmain/Config/RRAM_ISSCC_2012_4GB.config"
 )
 
 # System setup
